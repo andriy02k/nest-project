@@ -2,6 +2,7 @@ import {
   Injectable,
   UnauthorizedException,
   ConflictException,
+  NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -23,7 +24,7 @@ export class AuthService {
   ) {}
 
   async register(registerDto: RegisterDto): Promise<AuthResponseDto> {
-    const { username, email, password } = registerDto;
+    const { username, email, age, password } = registerDto;
 
     const existingUser = await this.usersRepository.findOne({
       where: { email },
@@ -53,18 +54,46 @@ export class AuthService {
     return this.generateTokensAndSave(user);
   }
 
-  async refreshToken(refreshToken: string): Promise<{ accessToken: string }> {
+  async refreshToken(refreshToken: string): Promise<AuthResponseDto> {
+    if (!refreshToken) {
+      throw new UnauthorizedException('No refresh token provided');
+    }
+
     const decoded = this.jwtService.verify(refreshToken);
+
     const user = await this.usersRepository.findOne({
       where: { id: decoded.sub },
     });
 
-    if (!user || !(await bcrypt.compare(refreshToken, user.refreshToken))) {
+    if (!user) {
+      throw new UnauthorizedException('User not found');
+    }
+
+    const isTokenValid = await bcrypt.compare(refreshToken, user.refreshToken);
+    if (!isTokenValid) {
       throw new UnauthorizedException('Invalid refresh token');
     }
 
-    const accessToken = this.generateAccessToken(user);
-    return { accessToken };
+    return this.generateTokensAndSave(user);
+  }
+
+  async logout(refreshToken: string): Promise<void> {
+    let decoded: any;
+
+    try {
+      decoded = this.jwtService.verify(refreshToken);
+    } catch (err) {
+      return;
+    }
+
+    const user = await this.usersRepository.findOne({
+      where: { id: decoded.sub },
+    });
+
+    if (user) {
+      user.refreshToken = null;
+      await this.usersRepository.save(user);
+    }
   }
 
   private async generateTokensAndSave(user: User): Promise<AuthResponseDto> {
